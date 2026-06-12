@@ -1,0 +1,28 @@
+{
+    "vcan1": {
+        "test1": {
+            "Speed": 0
+        }
+    },
+    "vcan2": {
+        "test2": {
+            "Mode": 3
+        }
+    },
+    "vcan3": {
+        "test3": {
+            "Meter": 21
+        }
+    },
+    "vcan4": {
+        "test4": {
+            "sta": 1
+        }
+    },
+    "vcan5": {
+        "test5": {
+            "SW": 0
+        }
+    },
+    "vcan6": {}
+}

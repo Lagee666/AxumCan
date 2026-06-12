@@ -1,0 +1,17 @@
+@import "tailwindcss";
+
+body {
+    @apply bg-gray-900 text-white font-sans;
+}
+
+input[type="number"] {
+    @apply bg-gray-800 text-white border border-gray-700 rounded px-2 py-1;
+}
+
+button {
+    @apply bg-blue-600 hover:bg-blue-700 text-white font-bold py-1 px-3 rounded;
+}
+
+.signal-card {
+    @apply bg-gray-800 p-4 rounded-lg shadow-lg mb-4 flex items-center justify-between;
+}
