@@ -8,8 +8,9 @@ use tokio::sync::broadcast;
 use tracing::{debug, error};
 
 use crate::{
-    can_sender::{Builder, CanActor},
+    can_sender::{CanActor, CanBuilder, MockBuilder},
     error::Error,
+    message_utils::MessageUtils,
     signals::Signals,
 };
 
@@ -71,10 +72,9 @@ impl Registry {
 
     fn register_actors(&mut self, channel: &str, signals: HashMap<String, HashMap<String, u64>>) {
         for (message, signal_map) in signals {
-            let id = find_id(message);
-            let actor = match Builder::new()
+            let actor = match MockBuilder::new()
                 .set_interface(channel)
-                .set_message_label(message_label)
+                .set_id(message)
                 .build()
             {
                 Ok(actor) => actor,
@@ -85,13 +85,14 @@ impl Registry {
             };
 
             for (signal, value) in signal_map {
-                let signal_label = find_signal(signal);
+                // let signal_name = find_signal(signal);
+                let signal_name = signal;
                 debug!(
                     "Register Channel: {:?}, message: {:?}, signal: {:?}",
-                    channel, id, signal_label
+                    channel, id, signal_name
                 );
-                actor.send(signal_label, value as f64);
-                self.add(signal_label, actor.clone());
+                actor.send(signal_name, value as f64);
+                self.add(signal_name, actor.clone());
             }
         }
     }
@@ -113,7 +114,7 @@ impl Registry {
         let actors = self.actors.get(&signal_label);
         if let Some(actors) = actors {
             for actor in actors {
-                actor.send(signal_label, value);
+                actor.send(signal_label.clone(), value);
             }
         }
     }
@@ -139,7 +140,7 @@ impl Registry {
         let actors = self.actors.get(&signal_label);
         if let Some(actors) = actors {
             for actor in actors {
-                actor.send(signal_label, value);
+                actor.send(signal_label.clone(), value);
             }
         }
 
