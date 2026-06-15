@@ -1,4 +1,4 @@
-use std::{collections::HashMap, net::SocketAddr, str::FromStr, sync::Arc};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
 use axum::{
     Router,
@@ -26,8 +26,10 @@ struct CanSignal {
 
 use tower_http::services::ServeDir;
 
+type AppRegistry = Registry; // Uses default String implementations
+
 struct AppState {
-    registry: Arc<Registry>,
+    registry: Arc<AppRegistry>,
 }
 
 #[tokio::main]
@@ -43,7 +45,7 @@ async fn main() {
 
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
-    let mut registry = Registry::default();
+    let mut registry = AppRegistry::default();
     if let Err(e) = registry.init().await {
         error!("Init CAN registry failed: {}, exit the process", e);
         std::process::exit(1);
@@ -75,7 +77,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     let mut broadcast_rx = state.registry.broadcast_tx.subscribe();
 
     // Send initial state
-    let init_msg = WsMessage::Init {
+    let init_msg = WsMessage::<String>::Init {
         signals: state.registry.initial_signals.clone(),
     };
     if let Ok(json) = serde_json::to_string(&init_msg) {
@@ -99,15 +101,11 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
 
     let mut recv_task = tokio::spawn(async move {
         while let Some(Ok(AxumMessage::Text(text))) = receiver.next().await {
-            match serde_json::from_str::<WsMessage>(&text) {
+            match serde_json::from_str::<WsMessage<String>>(&text) {
                 Ok(msg) => match msg {
                     WsMessage::ClientUpdate { signal, value } => {
                         info!("Received update from client: {} = {}", signal, value);
-                        if let Ok(label) = find_signal(signal) {
-                            registry.update(label, value, false);
-                        } else {
-                            error!("Unknown signal label: {}", signal);
-                        }
+                        registry.update(signal, value, false);
                     }
                     WsMessage::SetArbitration {
                         signal,
@@ -117,11 +115,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                             "Set arbitration for {}: allow_backend = {}",
                             signal, allow_backend
                         );
-                        if let Ok(label) = find_signal(&signal) {
-                            registry.set_arbitration(label, allow_backend);
-                        } else {
-                            error!("Unknown signal label: {}", signal);
-                        }
+                        registry.set_arbitration(signal, allow_backend);
                     }
                     _ => {}
                 },

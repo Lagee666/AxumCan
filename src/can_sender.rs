@@ -6,129 +6,15 @@ use tokio::sync::watch::{Receiver, Sender};
 use tracing::error;
 
 use crate::error::Error;
-
-pub trait CanBuilder {
-    fn build(self) -> Result<CanActor, Error>;
-    fn cycle_time(&self) -> tokio::time::Duration;
-}
-
-#[derive(Default)]
-pub struct MockBuilder {
-    interface: String,
-    message_id: Option<String>,
-    cycle_time: Duration,
-}
-
-impl MockBuilder {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn set_interface(mut self, interface: &str) -> Self {
-        self.interface = interface.to_string();
-        self
-    }
-
-    pub fn set_id(mut self, message_id: String) -> Self {
-        self.message_id = Some(message_id);
-        self
-    }
-
-    fn to_id(&self) -> u16 {
-        let value = self.as_str();
-        match value {
-            "test1" => 0x100,
-            "test2" => 0x200,
-            "test3" => 0x300,
-            "test4" => 0x400,
-            "test5" => 0x500,
-            _ => 0,
-        }
-    }
-
-    fn get_cycle_time(&self) -> Duration {
-        let value = self.as_str();
-        match value {
-            "test1" => Duration::from_millis(100),
-            "test2" => Duration::from_millis(200),
-            "test3" => Duration::from_millis(300),
-            "test4" => Duration::from_millis(400),
-            "test5" => Duration::from_millis(500),
-            _ => Duration::from_secs(10000),
-        }
-    }
-}
-
-impl CanBuilder for MockBuilder {
-    fn build(self) -> Result<CanActor, Error> {
-        let (tx, rx) = tokio::sync::watch::channel(HashMap::new());
-        let mut socket = MockSocket::default();
-        let Some(id) = self.message_id else {
-            return Err(Error::MessageLabelNone);
-        };
-        socket.id = id;
-        let can_sender = SenderSession {
-            socket: Box::new(socket),
-            builder: Box::new(self),
-            rx,
-        };
-        can_sender.start_task();
-        Ok(CanActor { tx })
-    }
-
-    fn cycle_time(&self) -> Duration {
-        self.cycle_time
-    }
-}
-
-#[async_trait]
-pub trait SocketUtils {
-    fn create_frame(&self, signal_map: HashMap<String, f64>) -> CanFdFrame;
-    async fn send_can(&self, frame: CanFdFrame);
-}
-
-#[derive(Default)]
-pub struct MockSocket {
-    pub id: u16,
-}
-
-#[async_trait]
-impl SocketUtils for MockSocket {
-    fn create_frame(&self, signal_map: HashMap<String, f64>) -> CanFdFrame {
-        let id = match StandardId::new(self.id) {
-            Some(id) => Id::Standard(id),
-            None => {
-                error!("Failed to create CAN ID");
-                return CanFdFrame::default();
-            }
-        };
-        let mut signal_vector = signal_map.iter().collect::<Vec<_>>();
-        signal_vector.sort_by(|a, b| a.0.cmp(b.0));
-        let mut data = [0u8; 8];
-        for (i, (_signal, value)) in signal_vector.iter().enumerate() {
-            data[i] = **value as u8;
-        }
-
-        match CanFdFrame::new(id, &data) {
-            Some(frame) => frame,
-            None => {
-                error!("Failed to create CAN frame");
-                CanFdFrame::default()
-            }
-        }
-    }
-    async fn send_can(&self, frame: CanFdFrame) {
-        println!("{:?}", frame);
-    }
-}
+use crate::traits::{CanBuilderTrait, MessageTrait, SignalTrait, SocketUtilsTrait};
 
 #[derive(Clone)]
-pub struct CanActor {
-    tx: Sender<HashMap<String, f64>>,
+pub struct CanActor<Signal: SignalTrait> {
+    pub tx: Sender<HashMap<Signal, f64>>,
 }
 
-impl CanActor {
-    pub fn send(&self, signal_label: String, value: f64) {
+impl<Signal: SignalTrait> CanActor<Signal> {
+    pub fn send(&self, signal_label: Signal, value: f64) {
         self.tx.send_if_modified(|signal_map| {
             let mut changed = false;
             let signal_value = signal_map.get_mut(&signal_label);
@@ -149,16 +35,15 @@ impl CanActor {
     }
 }
 
-pub struct SenderSession {
-    socket: Box<dyn SocketUtils + Send>,
-    builder: Box<dyn CanBuilder>,
-    rx: Receiver<HashMap<String, f64>>,
+pub struct SenderSession<Signal: SignalTrait> {
+    pub socket: Box<dyn SocketUtilsTrait<Signal>>,
+    pub cycle_time: Duration,
+    pub rx: Receiver<HashMap<Signal, f64>>,
 }
 
-impl SenderSession {
-    fn start_task(mut self) {
-        let cycle_time = self.builder.cycle_time();
-        let mut interval = tokio::time::interval(cycle_time);
+impl<Signal: SignalTrait> SenderSession<Signal> {
+    pub fn start_task(mut self) {
+        let mut interval = tokio::time::interval(self.cycle_time);
         let signal_map = self.rx.borrow().clone();
         let mut can_frame = self.socket.create_frame(signal_map);
         tokio::spawn(async move {
@@ -170,5 +55,100 @@ impl SenderSession {
                 }
             }
         });
+    }
+}
+
+// --- Zero-Config Mock Implementations ---
+
+pub struct MockSocket {
+    pub id: u32,
+}
+
+#[async_trait]
+impl<Signal: SignalTrait> SocketUtilsTrait<Signal> for MockSocket {
+    fn create_frame(&self, signal_map: HashMap<Signal, f64>) -> CanFdFrame {
+        let id = match StandardId::new((self.id & 0x7FF) as u16) {
+            Some(id) => Id::Standard(id),
+            None => {
+                error!("Failed to create CAN ID");
+                return CanFdFrame::default();
+            }
+        };
+        let mut signal_vector = signal_map.iter().collect::<Vec<_>>();
+        signal_vector.sort_by(|a, b| a.0.to_string().cmp(&b.0.to_string()));
+        let mut data = [0u8; 8];
+        for (i, (_signal, value)) in signal_vector.iter().enumerate() {
+            if i >= 8 { break; }
+            data[i] = **value as u8;
+        }
+
+        match CanFdFrame::new(id, &data) {
+            Some(frame) => frame,
+            None => {
+                error!("Failed to create CAN frame");
+                CanFdFrame::default()
+            }
+        }
+    }
+    async fn send_can(&self, frame: CanFdFrame) {
+        println!("{:?}", frame);
+    }
+}
+
+/// The default builder used when the user wants to mock CAN data.
+pub struct MockBuilder<Signal: SignalTrait, Message: MessageTrait> {
+    pub interface: String,
+    pub message_label: Option<Message>,
+    _phantom: std::marker::PhantomData<Signal>,
+}
+
+impl<Signal: SignalTrait, Message: MessageTrait> Default for MockBuilder<Signal, Message> {
+    fn default() -> Self {
+        Self {
+            interface: String::new(),
+            message_label: None,
+            _phantom: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<Signal: SignalTrait, Message: MessageTrait> CanBuilderTrait<Signal, Message> for MockBuilder<Signal, Message> {
+    fn set_interface(mut self, interface: &str) -> Self {
+        self.interface = interface.to_string();
+        self
+    }
+
+    fn set_message_label(mut self, message_label: Message) -> Self {
+        self.message_label = Some(message_label);
+        self
+    }
+
+    fn build(self) -> Result<CanActor<Signal>, Error> {
+        let (tx, rx) = tokio::sync::watch::channel(HashMap::new());
+        let Some(message_label) = self.message_label else {
+            return Err(Error::MessageLabelNone);
+        };
+        
+        // Mock logic: generate stable fake metadata from the message label string
+        let label_str = message_label.to_string();
+        let fake_id = match label_str.as_str() {
+            "test1" => 0x100,
+            "test2" => 0x200,
+            "test3" => 0x300,
+            _ => label_str.bytes().fold(0u32, |acc, b| acc.wrapping_add(b as u32)),
+        };
+        let fake_cycle = match label_str.as_str() {
+            "test1" => Duration::from_millis(100),
+            _ => Duration::from_millis(500),
+        };
+
+        let socket = MockSocket { id: fake_id };
+        let can_sender = SenderSession {
+            socket: Box::new(socket),
+            cycle_time: fake_cycle,
+            rx,
+        };
+        can_sender.start_task();
+        Ok(CanActor { tx })
     }
 }

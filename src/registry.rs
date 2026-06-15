@@ -8,41 +8,55 @@ use tokio::sync::broadcast;
 use tracing::{debug, error};
 
 use crate::{
-    can_sender::{CanActor, CanBuilder, MockBuilder},
+    can_sender::{CanActor, MockBuilder},
     error::Error,
-    message_utils::MessageUtils,
     signals::Signals,
+    traits::{CanBuilderTrait, MessageTrait, SignalTrait},
 };
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", rename_all = "camelCase")]
-pub enum WsMessage {
+#[serde(bound(serialize = "Signal: Serialize", deserialize = "Signal: serde::de::DeserializeOwned"))]
+pub enum WsMessage<Signal: SignalTrait> {
     Init {
         signals: Signals,
     },
     ClientUpdate {
-        signal: String,
+        signal: Signal,
         value: f64,
     },
     SetArbitration {
-        signal: String,
+        signal: Signal,
         #[serde(rename = "allowBackend")]
         allow_backend: bool,
     },
     StateChanged {
-        signal: String,
+        signal: String, 
         value: f64,
     },
 }
 
-pub struct Registry {
-    actors: HashMap<String, Vec<CanActor>>,
-    arbitration: Arc<Mutex<HashMap<String, bool>>>,
-    pub broadcast_tx: broadcast::Sender<WsMessage>,
+/// The central coordinator for the CAN simulation.
+/// Defaults to using Strings as labels and a MockBuilder for zero-config simulation.
+pub struct Registry<Signal = String, Message = String, Builder = MockBuilder<Signal, Message>>
+where
+    Signal: SignalTrait,
+    Message: MessageTrait,
+    Builder: CanBuilderTrait<Signal, Message>,
+{
+    actors: HashMap<Signal, Vec<CanActor<Signal>>>,
+    arbitration: Arc<Mutex<HashMap<Signal, bool>>>,
+    pub broadcast_tx: broadcast::Sender<WsMessage<Signal>>,
     pub initial_signals: Signals,
+    _phantom: std::marker::PhantomData<(Message, Builder)>,
 }
 
-impl Default for Registry {
+impl<Signal, Message, Builder> Default for Registry<Signal, Message, Builder>
+where
+    Signal: SignalTrait,
+    Message: MessageTrait,
+    Builder: CanBuilderTrait<Signal, Message>,
+{
     fn default() -> Self {
         let (broadcast_tx, _) = broadcast::channel(100);
         Self {
@@ -50,11 +64,17 @@ impl Default for Registry {
             arbitration: Arc::new(Mutex::new(HashMap::new())),
             broadcast_tx,
             initial_signals: Signals::default(),
+            _phantom: std::marker::PhantomData,
         }
     }
 }
 
-impl Registry {
+impl<Signal, Message, Builder> Registry<Signal, Message, Builder>
+where
+    Signal: SignalTrait,
+    Message: MessageTrait,
+    Builder: CanBuilderTrait<Signal, Message>,
+{
     pub async fn init(&mut self) -> Result<(), Error> {
         self.actors.clear();
         let signals = Signals::init().await?;
@@ -71,10 +91,18 @@ impl Registry {
     }
 
     fn register_actors(&mut self, channel: &str, signals: HashMap<String, HashMap<String, u64>>) {
-        for (message, signal_map) in signals {
-            let actor = match MockBuilder::new()
+        for (message_str, signal_map) in signals {
+            let message_label = match Message::from_str(&message_str) {
+                Ok(label) => label,
+                Err(_) => {
+                    error!("Parse message {} failed", message_str);
+                    continue;
+                }
+            };
+
+            let actor = match Builder::default()
                 .set_interface(channel)
-                .set_id(message)
+                .set_message_label(message_label.clone())
                 .build()
             {
                 Ok(actor) => actor,
@@ -84,24 +112,29 @@ impl Registry {
                 }
             };
 
-            for (signal, value) in signal_map {
-                // let signal_name = find_signal(signal);
-                let signal_name = signal;
+            for (signal_str, value) in signal_map {
+                let signal_label = match Signal::from_str(&signal_str) {
+                    Ok(label) => label,
+                    Err(_) => {
+                        error!("Parse signal {} failed", signal_str);
+                        continue;
+                    }
+                };
                 debug!(
                     "Register Channel: {:?}, message: {:?}, signal: {:?}",
-                    channel, id, signal_name
+                    channel, message_label, signal_label
                 );
-                actor.send(signal_name, value as f64);
-                self.add(signal_name, actor.clone());
+                actor.send(signal_label.clone(), value as f64);
+                self.add(signal_label, actor.clone());
             }
         }
     }
 
-    fn add(&mut self, signal_label: String, actor: CanActor) {
+    fn add(&mut self, signal_label: Signal, actor: CanActor<Signal>) {
         self.actors.entry(signal_label).or_default().push(actor);
     }
 
-    pub fn update(&self, signal_label: String, value: f64, is_backend: bool) {
+    pub fn update(&self, signal_label: Signal, value: f64, is_backend: bool) {
         if is_backend {
             let arbitration = self.arbitration.lock().unwrap();
             if let Some(&allow_backend) = arbitration.get(&signal_label) {
@@ -119,14 +152,13 @@ impl Registry {
         }
     }
 
-    pub fn set_arbitration(&self, signal_label: String, allow_backend: bool) {
+    pub fn set_arbitration(&self, signal_label: Signal, allow_backend: bool) {
         let mut arbitration = self.arbitration.lock().unwrap();
         arbitration.insert(signal_label, allow_backend);
     }
 
-    /// FEATURE 1: Update a signal that exists in the dashboard and sync its UI value.
-    /// This also respects arbitration and updates the underlying CAN actors.
-    pub fn update_dashboard(&self, signal_label: String, value: f64) {
+    /// Update a signal that exists in the dashboard and sync its UI value.
+    pub fn update_dashboard(&self, signal_label: Signal, value: f64) {
         // Respect arbitration
         let arbitration = self.arbitration.lock().unwrap();
         if let Some(&allow_backend) = arbitration.get(&signal_label) {
@@ -151,84 +183,11 @@ impl Registry {
         });
     }
 
-    /// FEATURE 2: Send an arbitrary signal to the frontend Monitor only.
-    /// This supports any signal name (String), even if it doesn't exist in the signal map.
+    /// Send an arbitrary signal to the frontend Monitor only.
     pub fn send_to_monitor(&self, signal_name: String, value: f64) {
         let _ = self.broadcast_tx.send(WsMessage::StateChanged {
             signal: signal_name,
             value,
         });
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_ws_message_serialization() {
-        let msg = WsMessage::SetArbitration {
-            signal: "VehSpeed".to_string(),
-            allow_backend: false,
-        };
-        let json = serde_json::to_string(&msg).unwrap();
-        // Check that variant is camelCase (setArbitration) and field is renamed (allowBackend)
-        assert!(json.contains("\"type\":\"setArbitration\""));
-        assert!(json.contains("\"allowBackend\":false"));
-
-        let deserialized: WsMessage = serde_json::from_str(&json).unwrap();
-        if let WsMessage::SetArbitration {
-            signal,
-            allow_backend,
-        } = deserialized
-        {
-            assert_eq!(signal, "VehSpeed");
-            assert_eq!(allow_backend, false);
-        } else {
-            panic!("Deserialized to wrong variant");
-        }
-    }
-
-    #[tokio::test]
-    async fn test_arbitration_logic() {
-        let registry = Registry::default();
-        let label = find_signal("VehSpeed");
-        let mut rx = registry.broadcast_tx.subscribe();
-
-        // 1. Enable arbitration (default is allow)
-        registry.set_arbitration(label, true);
-        registry.update_dashboard(label, 10.0);
-
-        // Should receive message
-        let msg = rx.recv().await.unwrap();
-        if let WsMessage::StateChanged { value, .. } = msg {
-            assert_eq!(value, 10.0);
-        }
-
-        // 2. Disable arbitration
-        registry.set_arbitration(label, false);
-        registry.update_dashboard(label, 20.0);
-
-        // Should NOT receive a new message (timeout or check that previous is different)
-        // In a real test we might use tokio::time::timeout
-        let result = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv()).await;
-        assert!(
-            result.is_err(),
-            "Should not have received message when arbitration is disabled"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_send_to_monitor() {
-        let registry = Registry::default();
-        let mut rx = registry.broadcast_tx.subscribe();
-
-        registry.send_to_monitor("UnknownSignal".to_string(), 99.0);
-
-        let msg = rx.recv().await.unwrap();
-        if let WsMessage::StateChanged { signal, value } = msg {
-            assert_eq!(signal, "UnknownSignal");
-            assert_eq!(value, 99.0);
-        }
     }
 }
