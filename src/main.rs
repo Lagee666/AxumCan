@@ -9,8 +9,8 @@ use axum::{
     response::IntoResponse,
     routing::get,
 };
+use axum_can::registry::{Registry, WsMessage};
 use futures::{SinkExt, StreamExt};
-use remote_control_simulator::registry::{Registry, WsMessage};
 use serde::{Deserialize, Serialize};
 use tracing::{error, info, level_filters::LevelFilter};
 

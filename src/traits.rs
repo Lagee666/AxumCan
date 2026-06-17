@@ -1,4 +1,4 @@
-use async_trait::async_trait;
+pub use async_trait::async_trait;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use socketcan::CanFdFrame;
@@ -6,7 +6,6 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::hash::Hash;
 use std::str::FromStr;
-use std::time::Duration;
 
 /// Trait representing a CAN Signal label.
 /// It is a blanket trait over standard Rust types like String or Enums.
