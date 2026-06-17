@@ -16,10 +16,13 @@ use crate::{
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", rename_all = "camelCase")]
-#[serde(bound(serialize = "Signal: Serialize", deserialize = "Signal: serde::de::DeserializeOwned"))]
+#[serde(bound(
+    serialize = "Signal: Serialize",
+    deserialize = "Signal: serde::de::DeserializeOwned"
+))]
 pub enum WsMessage<Signal: SignalTrait> {
     Init {
-        signals: Signals,
+        signals: Box<Signals>,
     },
     ClientUpdate {
         signal: Signal,
@@ -31,7 +34,7 @@ pub enum WsMessage<Signal: SignalTrait> {
         allow_backend: bool,
     },
     StateChanged {
-        signal: String, 
+        signal: String,
         value: f64,
     },
 }

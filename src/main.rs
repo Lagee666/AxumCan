@@ -78,7 +78,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
 
     // Send initial state
     let init_msg = WsMessage::<String>::Init {
-        signals: state.registry.initial_signals.clone(),
+        signals: Box::new(state.registry.initial_signals.clone()),
     };
     if let Ok(json) = serde_json::to_string(&init_msg) {
         if let Err(e) = sender.send(AxumMessage::Text(json.into())).await {
