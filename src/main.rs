@@ -1,11 +1,13 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc, path::Path};
 
 use axum_can::{
     axum_can::{AppState, serve},
-    can_sender::MockSocket,
+    can_sender::MockHardware,
     registry::Registry,
+    loader::setup_registry,
 };
 use tracing::{error, info, level_filters::LevelFilter};
+
 #[tokio::main]
 async fn main() {
     let subscriber = tracing_subscriber::fmt()
@@ -20,12 +22,13 @@ async fn main() {
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
     let mut registry = Registry::default();
-    if let Err(e) = registry.init().await {
+    let hardware = MockHardware;
+    let config_path = Path::new("can_signal.json");
+
+    if let Err(e) = setup_registry(&mut registry, &hardware, config_path).await {
         error!("Init CAN registry failed: {}, exit the process", e);
         std::process::exit(1);
     }
-    let mut registry = Registry::default();
-    registry.set_socket(Box::new(MockSocket));
 
     let state = Arc::new(AppState {
         registry: Arc::new(registry),
