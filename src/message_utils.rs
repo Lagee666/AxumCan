@@ -1,13 +1,13 @@
 use std::time::Duration;
 
-pub trait MessageUtils {
+pub trait MessageProvider {
     fn to_id(&self) -> u16;
     fn get_cycle_time(&self) -> Duration;
 }
 
 pub type MockMessage = String;
 
-impl MessageUtils for MockMessage {
+impl MessageProvider for MockMessage {
     fn to_id(&self) -> u16 {
         let value = self.as_str();
         match value {

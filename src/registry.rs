@@ -8,9 +8,8 @@ use tokio::sync::broadcast;
 use tracing::{debug, error};
 
 use crate::{
-    can_sender::{CanActor, CanBuilder, MockBuilder},
+    can_sender::{Builder, CanActor, MockSocket, SocketUtils},
     error::Error,
-    message_utils::MessageUtils,
     signals::Signals,
 };
 
@@ -18,7 +17,7 @@ use crate::{
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum WsMessage {
     Init {
-        signals: Signals,
+        signals: Box<Signals>,
     },
     ClientUpdate {
         signal: String,
@@ -36,6 +35,7 @@ pub enum WsMessage {
 }
 
 pub struct Registry {
+    socket: Box<dyn SocketUtils>,
     actors: HashMap<String, Vec<CanActor>>,
     arbitration: Arc<Mutex<HashMap<String, bool>>>,
     pub broadcast_tx: broadcast::Sender<WsMessage>,
@@ -46,6 +46,7 @@ impl Default for Registry {
     fn default() -> Self {
         let (broadcast_tx, _) = broadcast::channel(100);
         Self {
+            socket: Box::new(MockSocket),
             actors: HashMap::new(),
             arbitration: Arc::new(Mutex::new(HashMap::new())),
             broadcast_tx,
@@ -55,6 +56,10 @@ impl Default for Registry {
 }
 
 impl Registry {
+    pub fn set_socket(&mut self, socket: Box<dyn SocketUtils>) {
+        self.socket = socket;
+    }
+
     pub async fn init(&mut self) -> Result<(), Error> {
         self.actors.clear();
         let signals = Signals::init().await?;
@@ -72,9 +77,9 @@ impl Registry {
 
     fn register_actors(&mut self, channel: &str, signals: HashMap<String, HashMap<String, u64>>) {
         for (message, signal_map) in signals {
-            let actor = match MockBuilder::new()
+            let actor = match Builder::new()
                 .set_interface(channel)
-                .set_id(message)
+                .set_id(Box::new(message.clone()))
                 .build()
             {
                 Ok(actor) => actor,
@@ -85,13 +90,12 @@ impl Registry {
             };
 
             for (signal, value) in signal_map {
-                // let signal_name = find_signal(signal);
                 let signal_name = signal;
                 debug!(
                     "Register Channel: {:?}, message: {:?}, signal: {:?}",
-                    channel, id, signal_name
+                    channel, message, signal_name
                 );
-                actor.send(signal_name, value as f64);
+                actor.send(signal_name.clone(), value as f64);
                 self.add(signal_name, actor.clone());
             }
         }
@@ -183,7 +187,7 @@ mod tests {
         } = deserialized
         {
             assert_eq!(signal, "VehSpeed");
-            assert_eq!(allow_backend, false);
+            assert!(!allow_backend);
         } else {
             panic!("Deserialized to wrong variant");
         }
@@ -192,12 +196,12 @@ mod tests {
     #[tokio::test]
     async fn test_arbitration_logic() {
         let registry = Registry::default();
-        let label = find_signal("VehSpeed");
+        let label = "VehSpeed".to_string();
         let mut rx = registry.broadcast_tx.subscribe();
 
         // 1. Enable arbitration (default is allow)
-        registry.set_arbitration(label, true);
-        registry.update_dashboard(label, 10.0);
+        registry.set_arbitration(label.clone(), true);
+        registry.update_dashboard(label.clone(), 10.0);
 
         // Should receive message
         let msg = rx.recv().await.unwrap();
@@ -206,8 +210,8 @@ mod tests {
         }
 
         // 2. Disable arbitration
-        registry.set_arbitration(label, false);
-        registry.update_dashboard(label, 20.0);
+        registry.set_arbitration(label.clone(), false);
+        registry.update_dashboard(label.clone(), 20.0);
 
         // Should NOT receive a new message (timeout or check that previous is different)
         // In a real test we might use tokio::time::timeout
