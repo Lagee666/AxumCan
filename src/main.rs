@@ -1,6 +1,6 @@
 use std::{net::SocketAddr, sync::Arc};
 
-use remote_control_simulator::{
+use axum_can::{
     axum_can::{AppState, serve},
     can_sender::MockSocket,
     registry::Registry,
