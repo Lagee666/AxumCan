@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    path::PathBuf,
     sync::{Arc, Mutex},
 };
 
@@ -12,6 +13,8 @@ use crate::{
     error::Error,
     signals::Signals,
 };
+
+const JSON_FILE_PATH: &str = "can_signal.json";
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -38,6 +41,7 @@ pub struct Registry {
     socket: Box<dyn SocketUtils>,
     actors: HashMap<String, Vec<CanActor>>,
     arbitration: Arc<Mutex<HashMap<String, bool>>>,
+    signal_path: PathBuf,
     pub broadcast_tx: broadcast::Sender<WsMessage>,
     pub initial_signals: Signals,
 }
@@ -49,6 +53,7 @@ impl Default for Registry {
             socket: Box::new(MockSocket),
             actors: HashMap::new(),
             arbitration: Arc::new(Mutex::new(HashMap::new())),
+            signal_path: PathBuf::from(JSON_FILE_PATH),
             broadcast_tx,
             initial_signals: Signals::default(),
         }
@@ -60,9 +65,13 @@ impl Registry {
         self.socket = socket;
     }
 
+    pub fn set_signal_path(&mut self, path: PathBuf) {
+        self.signal_path = path;
+    }
+
     pub async fn init(&mut self) -> Result<(), Error> {
         self.actors.clear();
-        let signals = Signals::init().await?;
+        let signals = Signals::init(&self.signal_path).await?;
         self.initial_signals = signals.clone();
 
         self.register_actors("vcan1", signals.vcan1);

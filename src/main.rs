@@ -6,7 +6,6 @@ use axum_can::{
     registry::Registry,
 };
 use tracing::{error, info, level_filters::LevelFilter};
-
 #[tokio::main]
 async fn main() {
     let subscriber = tracing_subscriber::fmt()

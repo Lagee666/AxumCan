@@ -1,10 +1,8 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, path::Path};
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::Error;
-
-const JSON_FILE_PATH: &str = "can_signal.json";
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone, PartialEq, Eq)]
 pub struct Signals {
@@ -17,8 +15,8 @@ pub struct Signals {
 }
 
 impl Signals {
-    pub async fn init() -> Result<Self, Error> {
-        let content = tokio::fs::read_to_string(JSON_FILE_PATH).await?;
+    pub async fn init(path: &Path) -> Result<Self, Error> {
+        let content = tokio::fs::read_to_string(path).await?;
         serde_json::from_str(&content).map_err(|err| err.into())
     }
 }
