@@ -20,12 +20,11 @@ async fn main() {
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
     let mut registry = Registry::default();
+    registry.set_socket(Box::new(MockSocket));
     if let Err(e) = registry.init().await {
         error!("Init CAN registry failed: {}, exit the process", e);
         std::process::exit(1);
     }
-    let mut registry = Registry::default();
-    registry.set_socket(Box::new(MockSocket));
 
     let state = Arc::new(AppState {
         registry: Arc::new(registry),
