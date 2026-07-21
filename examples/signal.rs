@@ -1,24 +1,12 @@
 use std::{collections::HashMap, path::Path};
 
+use axum_can::{
+    error::Error,
+    signals::{ChannelInfo, MessageInfo},
+};
 use serde::{Deserialize, Serialize};
 
-use crate::error::Error;
-
-pub type Channel = String;
-pub type Message = String;
-pub type Signal = String;
-pub type SignalValue = u64;
-
-pub struct ChannelInfo {
-    pub channel: Channel,
-    pub messages: HashMap<Message, MessageInfo>,
-}
-
-pub struct MessageInfo {
-    pub message: Message,
-    pub cycle_time: u64,
-    pub signals: HashMap<Signal, SignalValue>,
-}
+fn main() {}
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone, PartialEq, Eq)]
 pub struct Signals {
