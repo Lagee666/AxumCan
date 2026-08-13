@@ -7,7 +7,7 @@ AxumCan is a real-time CAN signal simulator featuring a Rust backend and an inte
 ## Tech Stack
 
 - **Backend:** Rust, Axum (Web server), Tokio (Async runtime), SocketCAN (via `socketcan` crate, mocked by default).
-- **Frontend:** Single Page Application (SPA) using TypeScript, Vite, and Tailwind CSS 4.0.
+- **Frontend:** Single Page Application using TypeScript, Vite, and Tailwind CSS 4.0.
 - **Protocol:** JSON-based WebSockets for real-time signaling.
 
 ---
@@ -89,3 +89,4 @@ Messages exchanged between Client (C) and Server (S) use a `type` discriminator 
 | `clientUpdate` | C -> S | `signal: string, value: f64` | User changed a value manually on the dashboard. |
 | `setArbitration`| C -> S | `signal: string, allowBackend: bool` | Toggle whether the backend can overwrite a signal. |
 | `stateChanged` | S -> C | `signal: string, value: f64` | Broadcasts a value change to update UI and Monitor. |
+
