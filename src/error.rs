@@ -12,4 +12,12 @@ pub enum Error {
     MessageLabelNone,
     #[error("not support can frame type")]
     NotSupportCanFrameType,
+    #[error("invalid CAN model: {0}")]
+    InvalidModel(String),
+    #[error("invalid value for signal {0}: {1}")]
+    InvalidValue(String, f64),
+    #[error("invalid CAN frame: {0}")]
+    InvalidFrame(String),
+    #[error("transport error: {0}")]
+    Transport(String),
 }

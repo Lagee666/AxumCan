@@ -2,8 +2,8 @@ use std::{net::SocketAddr, sync::Arc};
 
 use axum_can::{
     axum_can::{AppState, serve},
-    can_sender::MockSocket,
     registry::Registry,
+    transport::TransportMode,
 };
 use tracing::{error, info, level_filters::LevelFilter};
 #[tokio::main]
@@ -20,7 +20,7 @@ async fn main() {
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
     let mut registry = Registry::default();
-    registry.set_socket(Box::new(MockSocket));
+    registry.set_transport_mode(TransportMode::Print);
     if let Err(e) = registry.init().await {
         error!("Init CAN registry failed: {}, exit the process", e);
         std::process::exit(1);
@@ -34,6 +34,12 @@ async fn main() {
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     info!("Listening on localhost:{}", port);
 
-    let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
+    let listener = match tokio::net::TcpListener::bind(&addr).await {
+        Ok(listener) => listener,
+        Err(error) => {
+            error!(%error, "failed to bind HTTP listener");
+            std::process::exit(1);
+        }
+    };
     serve(listener, state).await
 }
