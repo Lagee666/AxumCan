@@ -6,10 +6,10 @@
 
 **Status:** ready-for-agent
 
-- [ ] A public canonical model represents Channels, Messages, Signals, CAN IDs, Cycle Times, and initial Signal Values.
-- [ ] An asynchronous model source loads the model at startup.
-- [ ] The existing shorthand JSON can be translated into the canonical model through a compatibility source.
-- [ ] One unsigned little-endian Signal can be encoded into a validated classic CAN Frame.
-- [ ] Print mode displays the Channel, CAN ID, extended-ID state, and frame bytes.
-- [ ] The Message transmits periodically using its configured Cycle Time.
-- [ ] A fake source and print transport provide an end-to-end test of startup, encoding, and periodic output.
+- [x] A public canonical model represents Channels, Messages, Signals, CAN IDs, Cycle Times, and initial Signal Values.
+- [x] An asynchronous model source loads the model at startup.
+- [x] The existing shorthand JSON can be translated into the canonical model through a compatibility source.
+- [x] One unsigned little-endian Signal can be encoded into a validated classic CAN Frame.
+- [x] Print mode displays the Channel, CAN ID, extended-ID state, and frame bytes.
+- [x] The Message transmits periodically using its configured Cycle Time.
+- [x] A fake source and transport provide an end-to-end test of startup, encoding, and periodic output.
