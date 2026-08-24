@@ -6,10 +6,10 @@
 
 **Status:** ready-for-agent
 
-- [ ] A dashboard Client Update changes the corresponding Logical Signal Value.
-- [ ] The next periodic CAN Frame uses the latest value without requiring an event queue.
-- [ ] Accepted updates produce State Change broadcasts.
-- [ ] Multiple connected dashboards receive the same State Change.
-- [ ] Backend Control and Arbitration continue to determine whether backend changes are accepted.
-- [ ] Unknown or malformed WebSocket messages do not terminate the connection or corrupt Signal state.
-- [ ] WebSocket tests cover initialization, updates, broadcasts, arbitration, multiple clients, and disconnects.
+- [x] A dashboard Client Update changes the corresponding Logical Signal Value.
+- [x] The next periodic CAN Frame uses the latest value without requiring an event queue.
+- [x] Accepted updates produce State Change broadcasts.
+- [x] Multiple connected dashboards receive the same State Change.
+- [x] Backend Control and Arbitration continue to determine whether backend changes are accepted.
+- [x] Unknown or malformed WebSocket messages do not terminate the connection or corrupt Signal state.
+- [x] WebSocket tests cover initialization, updates, broadcasts, arbitration, multiple clients, and disconnects.

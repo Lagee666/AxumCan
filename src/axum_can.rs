@@ -20,12 +20,15 @@ pub struct AppState {
     pub registry: Arc<Registry>,
 }
 
-pub async fn serve(listener: TcpListener, state: Arc<AppState>) {
-    let app = Router::new()
+pub fn router(state: Arc<AppState>) -> Router {
+    Router::new()
         .route("/ws", get(ws_handler))
         .fallback_service(ServeDir::new("dashboard/dist"))
-        .with_state(state);
+        .with_state(state)
+}
 
+pub async fn serve(listener: TcpListener, state: Arc<AppState>) {
+    let app = router(state);
     if let Err(error) = axum::serve(listener, app).await {
         error!(%error, "HTTP server stopped with an error");
     }

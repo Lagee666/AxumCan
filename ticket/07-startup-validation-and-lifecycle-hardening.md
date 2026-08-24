@@ -6,12 +6,12 @@
 
 **Status:** ready-for-agent
 
-- [ ] Model validation completes before any cyclic sender task starts.
-- [ ] Transport initialization completes before any cyclic sender task starts.
-- [ ] Initialization failures leave no running sender tasks or partially active transports.
-- [ ] Repeated initialization does not leave duplicate or orphaned sender tasks.
-- [ ] Sender tasks exit cleanly when their owning simulator shuts down.
-- [ ] A closed state channel does not cause a busy loop.
-- [ ] Transport send failures are logged and periodic transmission continues.
-- [ ] WebSocket send/receive task failures do not stop unrelated CAN sender tasks.
-- [ ] Deterministic tests cover initialization failure, shutdown, repeated initialization, task cancellation, and send failure.
+- [x] Model validation completes before any cyclic sender task starts.
+- [x] Transport initialization completes before any cyclic sender task starts.
+- [x] Initialization failures leave no running sender tasks or partially active transports.
+- [x] Repeated initialization does not leave duplicate or orphaned sender tasks.
+- [x] Sender tasks exit cleanly when their owning simulator shuts down.
+- [x] A closed state channel does not cause a busy loop.
+- [x] Transport send failures are logged and periodic transmission continues.
+- [x] WebSocket send/receive task failures do not stop unrelated CAN sender tasks.
+- [x] Deterministic tests cover initialization failure, shutdown, repeated initialization, task cancellation, and send failure.

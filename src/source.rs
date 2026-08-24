@@ -227,4 +227,19 @@ mod tests {
         assert_eq!(model.channels[0].messages[0].can_id, 0x100);
         assert_eq!(model.channels[0].messages[0].signals[0].bit_length, 8);
     }
+
+    #[tokio::test]
+    async fn loads_explicit_json_into_the_same_canonical_model() {
+        let mut file = NamedTempFile::new().unwrap();
+        write!(
+            file,
+            r#"{{"channels":{{"vcan1":{{"messages":{{"Status":{{"can_id":256,"cycle_time_ms":100,"signals":{{"Speed":{{"start_bit":0,"bit_length":8,"initial_value":42}}}}}}}}}}}}}}"#
+        )
+        .unwrap();
+        let model = load_json(file.path()).await.unwrap();
+        let message = &model.channels[0].messages[0];
+        assert_eq!(model.channels[0].name, "vcan1");
+        assert_eq!(message.can_id, 0x100);
+        assert_eq!(message.signals[0].initial_value, 42.0);
+    }
 }

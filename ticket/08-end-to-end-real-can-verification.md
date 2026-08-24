@@ -6,9 +6,9 @@
 
 **Status:** ready-for-agent
 
-- [ ] A minimal explicit CAN Model defines one Channel, one Message, and representative Signals.
-- [ ] Print mode shows the expected Channel, CAN ID, identifier type, and eight-byte payload.
-- [ ] SocketCAN mode sends the same identifier and payload to the Channel-named interface.
-- [ ] The verification path does not require physical CAN hardware.
-- [ ] The verification path clearly reports when the required Linux interface is unavailable.
-- [ ] The documented or automated check confirms periodic transmission and runtime Signal Value updates.
+- [x] A minimal explicit CAN Model defines one Channel, one Message, and representative Signals.
+- [x] Print mode shows the expected Channel, CAN ID, identifier type, and eight-byte payload.
+- [x] SocketCAN mode sends the same identifier and payload to the Channel-named interface.
+- [x] The verification path does not require physical CAN hardware.
+- [x] The verification path clearly reports when the required Linux interface is unavailable.
+- [x] The documented or automated check confirms periodic transmission and runtime Signal Value updates.

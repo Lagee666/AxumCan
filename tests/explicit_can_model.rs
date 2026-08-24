@@ -83,9 +83,16 @@ async fn registry_periodically_sends_a_canonical_message() {
     tokio::time::advance(Duration::from_millis(100)).await;
     tokio::task::yield_now().await;
 
-    let frames = frames.lock().unwrap();
-    assert_eq!(frames.len(), 1);
-    assert_eq!(frames[0].id, 0x100);
-    assert!(!frames[0].is_extended);
-    assert_eq!(frames[0].data, vec![42, 0, 0, 0, 0, 0, 0, 0]);
+    {
+        let captured = frames.lock().unwrap();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].id, 0x100);
+        assert!(!captured[0].is_extended);
+        assert_eq!(captured[0].data, vec![42, 0, 0, 0, 0, 0, 0, 0]);
+    }
+
+    assert!(registry.update("Speed".into(), 99.0, false));
+    tokio::time::advance(Duration::from_millis(100)).await;
+    tokio::task::yield_now().await;
+    assert_eq!(frames.lock().unwrap()[1].data[0], 99);
 }

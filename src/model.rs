@@ -273,6 +273,32 @@ mod tests {
     }
 
     #[test]
+    fn rejects_signal_outside_classic_can_payload() {
+        let message = CanMessage {
+            name: "Status".into(),
+            can_id: 0x100,
+            is_extended: false,
+            cycle_time: Duration::from_millis(100),
+            signals: vec![signal("A", 60, 8)],
+        };
+        assert!(message.validate("vcan0").is_err());
+    }
+
+    #[test]
+    fn rejects_zero_signal_factor() {
+        let mut value = signal("A", 0, 8);
+        value.factor = 0.0;
+        let message = CanMessage {
+            name: "Status".into(),
+            can_id: 0x100,
+            is_extended: false,
+            cycle_time: Duration::from_millis(100),
+            signals: vec![value],
+        };
+        assert!(message.validate("vcan0").is_err());
+    }
+
+    #[test]
     fn uses_dbc_big_endian_bit_walk() {
         let mut value = signal("A", 7, 16);
         value.byte_order = ByteOrder::BigEndian;
