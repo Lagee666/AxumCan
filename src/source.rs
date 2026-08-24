@@ -91,15 +91,7 @@ pub async fn load_json(path: &Path) -> Result<CanModel, Error> {
 pub fn legacy_signals(model: &CanModel) -> Signals {
     let mut signals = Signals::default();
     for channel in &model.channels {
-        let target = match channel.name.as_str() {
-            "vcan1" => &mut signals.vcan1,
-            "vcan2" => &mut signals.vcan2,
-            "vcan3" => &mut signals.vcan3,
-            "vcan4" => &mut signals.vcan4,
-            "vcan5" => &mut signals.vcan5,
-            "vcan6" => &mut signals.vcan6,
-            _ => continue,
-        };
+        let target = signals.channels.entry(channel.name.clone()).or_default();
         for message in &channel.messages {
             target.insert(
                 message.name.clone(),
@@ -168,48 +160,42 @@ fn explicit_model(config: ExplicitConfig) -> Result<CanModel, Error> {
 }
 
 fn legacy_model(signals: Signals) -> CanModel {
-    let channels = [
-        ("vcan1", signals.vcan1),
-        ("vcan2", signals.vcan2),
-        ("vcan3", signals.vcan3),
-        ("vcan4", signals.vcan4),
-        ("vcan5", signals.vcan5),
-        ("vcan6", signals.vcan6),
-    ]
-    .into_iter()
-    .map(|(channel, messages)| CanChannel {
-        name: channel.into(),
-        messages: messages
-            .into_iter()
-            .map(|(name, values)| {
-                let mut values = values.into_iter().collect::<Vec<_>>();
-                values.sort_by(|left, right| left.0.cmp(&right.0));
-                CanMessage {
-                    can_id: name.to_id() as u32,
-                    is_extended: false,
-                    cycle_time: name.get_cycle_time(),
-                    name,
-                    signals: values
-                        .into_iter()
-                        .enumerate()
-                        .map(|(index, (name, value))| SignalSpec {
-                            name,
-                            start_bit: u8::try_from(index.saturating_mul(8)).unwrap_or(64),
-                            bit_length: 8,
-                            byte_order: ByteOrder::LittleEndian,
-                            is_signed: false,
-                            factor: 1.0,
-                            offset: 0.0,
-                            minimum: None,
-                            maximum: None,
-                            initial_value: value as f64,
-                        })
-                        .collect(),
-                }
-            })
-            .collect(),
-    })
-    .collect();
+    let channels = signals
+        .channels
+        .into_iter()
+        .map(|(channel, messages)| CanChannel {
+            name: channel,
+            messages: messages
+                .into_iter()
+                .map(|(name, values)| {
+                    let mut values = values.into_iter().collect::<Vec<_>>();
+                    values.sort_by(|left, right| left.0.cmp(&right.0));
+                    CanMessage {
+                        can_id: name.to_id() as u32,
+                        is_extended: false,
+                        cycle_time: name.get_cycle_time(),
+                        name,
+                        signals: values
+                            .into_iter()
+                            .enumerate()
+                            .map(|(index, (name, value))| SignalSpec {
+                                name,
+                                start_bit: u8::try_from(index.saturating_mul(8)).unwrap_or(64),
+                                bit_length: 8,
+                                byte_order: ByteOrder::LittleEndian,
+                                is_signed: false,
+                                factor: 1.0,
+                                offset: 0.0,
+                                minimum: None,
+                                maximum: None,
+                                initial_value: value as f64,
+                            })
+                            .collect(),
+                    }
+                })
+                .collect(),
+        })
+        .collect();
     CanModel { channels }
 }
 
@@ -224,8 +210,13 @@ mod tests {
         let mut file = NamedTempFile::new().unwrap();
         write!(file, r#"{{"vcan1":{{"test1":{{"Speed":0}}}},"vcan2":{{}},"vcan3":{{}},"vcan4":{{}},"vcan5":{{}},"vcan6":{{}}}}"#).unwrap();
         let model = load_json(file.path()).await.unwrap();
-        assert_eq!(model.channels[0].messages[0].can_id, 0x100);
-        assert_eq!(model.channels[0].messages[0].signals[0].bit_length, 8);
+        let message = model
+            .channels
+            .iter()
+            .find_map(|channel| channel.messages.first())
+            .unwrap();
+        assert_eq!(message.can_id, 0x100);
+        assert_eq!(message.signals[0].bit_length, 8);
     }
 
     #[tokio::test]
