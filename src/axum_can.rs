@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use crate::registry::{Registry, WsMessage};
 use axum::{
@@ -11,19 +11,8 @@ use axum::{
     routing::get,
 };
 use futures::{SinkExt, StreamExt};
-use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 use tracing::{error, info};
-
-#[derive(Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
-struct CanSignal {
-    vcan1: HashMap<String, HashMap<String, u64>>,
-    vcan2: HashMap<String, HashMap<String, u64>>,
-    vcan3: HashMap<String, HashMap<String, u64>>,
-    vcan4: HashMap<String, HashMap<String, u64>>,
-    vcan5: HashMap<String, HashMap<String, u64>>,
-    vcan6: HashMap<String, HashMap<String, u64>>,
-}
 
 use tower_http::services::ServeDir;
 
@@ -31,13 +20,18 @@ pub struct AppState {
     pub registry: Arc<Registry>,
 }
 
-pub async fn serve(listener: TcpListener, state: Arc<AppState>) {
-    let app = Router::new()
+pub fn router(state: Arc<AppState>) -> Router {
+    Router::new()
         .route("/ws", get(ws_handler))
         .fallback_service(ServeDir::new("dashboard/dist"))
-        .with_state(state);
+        .with_state(state)
+}
 
-    axum::serve(listener, app).await.unwrap();
+pub async fn serve(listener: TcpListener, state: Arc<AppState>) {
+    let app = router(state);
+    if let Err(error) = axum::serve(listener, app).await {
+        error!(%error, "HTTP server stopped with an error");
+    }
 }
 
 async fn ws_handler(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -52,21 +46,21 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     let init_msg = WsMessage::Init {
         signals: Box::new(state.registry.initial_signals.clone()),
     };
-    if let Ok(json) = serde_json::to_string(&init_msg) {
-        if let Err(e) = sender.send(AxumMessage::Text(json.into())).await {
-            error!("Failed to send init message: {}", e);
-            return;
-        }
+    if let Ok(json) = serde_json::to_string(&init_msg)
+        && let Err(e) = sender.send(AxumMessage::Text(json.into())).await
+    {
+        error!("Failed to send init message: {}", e);
+        return;
     }
 
     let registry = state.registry.clone();
 
     let mut send_task = tokio::spawn(async move {
         while let Ok(msg) = broadcast_rx.recv().await {
-            if let Ok(json) = serde_json::to_string(&msg) {
-                if sender.send(AxumMessage::Text(json.into())).await.is_err() {
-                    break;
-                }
+            if let Ok(json) = serde_json::to_string(&msg)
+                && sender.send(AxumMessage::Text(json.into())).await.is_err()
+            {
+                break;
             }
         }
     });

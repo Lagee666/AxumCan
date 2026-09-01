@@ -22,12 +22,8 @@ pub struct MessageInfo {
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone, PartialEq, Eq)]
 pub struct Signals {
-    pub vcan1: HashMap<String, HashMap<String, u64>>,
-    pub vcan2: HashMap<String, HashMap<String, u64>>,
-    pub vcan3: HashMap<String, HashMap<String, u64>>,
-    pub vcan4: HashMap<String, HashMap<String, u64>>,
-    pub vcan5: HashMap<String, HashMap<String, u64>>,
-    pub vcan6: HashMap<String, HashMap<String, u64>>,
+    #[serde(flatten)]
+    pub channels: HashMap<Channel, HashMap<Message, HashMap<Signal, SignalValue>>>,
 }
 
 impl Signals {
@@ -39,14 +35,7 @@ impl Signals {
     pub fn to_channel_info(&self) -> Vec<ChannelInfo> {
         let mut channels = Vec::new();
 
-        for (channel_name, messages) in [
-            ("vcan1", &self.vcan1),
-            ("vcan2", &self.vcan2),
-            ("vcan3", &self.vcan3),
-            ("vcan4", &self.vcan4),
-            ("vcan5", &self.vcan5),
-            ("vcan6", &self.vcan6),
-        ] {
+        for (channel_name, messages) in &self.channels {
             let mut message_infos = HashMap::new();
             for (message_name, signals) in messages {
                 let mut signal_infos = HashMap::new();
@@ -63,7 +52,7 @@ impl Signals {
                 );
             }
             channels.push(ChannelInfo {
-                channel: channel_name.to_string(),
+                channel: channel_name.clone(),
                 messages: message_infos,
             });
         }

@@ -1,142 +1,124 @@
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, sync::Arc};
 
-use async_trait::async_trait;
-use socketcan::{CanFdFrame, EmbeddedFrame, Id, StandardId};
-use tokio::sync::watch::{Receiver, Sender};
-use tracing::error;
+use tokio::{sync::watch, task::JoinHandle};
+use tracing::{error, info};
 
-use crate::{error::Error, message_utils::MessageProvider};
-
-#[derive(Default)]
-pub struct Builder {
-    socket: Option<Box<dyn SocketUtils>>,
-    interface: String,
-    message_id: Option<Box<dyn MessageProvider>>,
-}
-
-impl Builder {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn build(mut self) -> Result<CanActor, Error> {
-        let (tx, rx) = tokio::sync::watch::channel(HashMap::new());
-        if self.socket.is_none() {
-            self.socket = Some(Box::new(MockSocket))
-        }
-        if self.message_id.is_none() {
-            return Err(Error::MessageLabelNone);
-        }
-        let cycle_time = self.message_id.as_ref().unwrap().get_cycle_time();
-        let message_id = self.message_id.take().unwrap().to_id();
-        let can_sender = SenderSession {
-            builder: self,
-            cycle_time,
-            message_id,
-            rx,
-        };
-        can_sender.start_task();
-        Ok(CanActor { tx })
-    }
-
-    pub fn set_interface(mut self, interface: &str) -> Self {
-        self.interface = interface.to_string();
-        self
-    }
-
-    pub fn set_id(mut self, message_id: Box<dyn MessageProvider>) -> Self {
-        self.message_id = Some(message_id);
-        self
-    }
-}
-
-#[async_trait]
-pub trait SocketUtils: Send + Sync + 'static {
-    fn create_frame(&self, message_id: u16, signal_map: HashMap<String, f64>) -> CanFdFrame;
-    async fn send_can(&self, frame: CanFdFrame);
-}
-
-#[derive(Default)]
-pub struct MockSocket;
-
-#[async_trait]
-impl SocketUtils for MockSocket {
-    fn create_frame(&self, message_id: u16, signal_map: HashMap<String, f64>) -> CanFdFrame {
-        let id = match StandardId::new(message_id) {
-            Some(id) => Id::Standard(id),
-            None => {
-                error!("Failed to create CAN ID");
-                return CanFdFrame::default();
-            }
-        };
-        let mut signal_vector = signal_map.iter().collect::<Vec<_>>();
-        signal_vector.sort_by(|a, b| a.0.cmp(b.0));
-        let mut data = [0u8; 8];
-        for (i, (_signal, value)) in signal_vector.iter().enumerate() {
-            data[i] = **value as u8;
-        }
-
-        match CanFdFrame::new(id, &data) {
-            Some(frame) => frame,
-            None => {
-                error!("Failed to create CAN frame");
-                CanFdFrame::default()
-            }
-        }
-    }
-    async fn send_can(&self, frame: CanFdFrame) {
-        println!("{:?}", frame);
-    }
-}
+use crate::{encoder::encode_message, model::CanMessage, transport::CanTransport};
 
 #[derive(Clone)]
 pub struct CanActor {
-    tx: Sender<HashMap<String, f64>>,
+    tx: watch::Sender<HashMap<String, f64>>,
 }
 
 impl CanActor {
     pub fn send(&self, signal_label: String, value: f64) {
-        self.tx.send_if_modified(|signal_map| {
-            let mut changed = false;
-            let signal_value = signal_map.get_mut(&signal_label);
-            match signal_value {
-                Some(v) => {
-                    if *v != value {
-                        *v = value;
-                        changed = true;
-                    }
+        self.tx
+            .send_if_modified(|values| match values.get_mut(&signal_label) {
+                Some(current) if *current == value => false,
+                Some(current) => {
+                    *current = value;
+                    true
                 }
                 None => {
-                    signal_map.insert(signal_label, value);
-                    changed = true;
+                    values.insert(signal_label, value);
+                    true
                 }
-            }
-            changed
-        });
+            });
     }
 }
 
-pub struct SenderSession {
-    builder: Builder,
-    message_id: u16,
-    cycle_time: Duration,
-    rx: Receiver<HashMap<String, f64>>,
+pub struct SenderTask {
+    pub actor: CanActor,
+    pub task: JoinHandle<()>,
 }
 
-impl SenderSession {
-    fn start_task(mut self) {
-        let mut interval = tokio::time::interval(self.cycle_time);
-        let signal_map = self.rx.borrow().clone();
-        let socket = self.builder.socket.unwrap();
-        let mut can_frame = socket.create_frame(self.message_id, signal_map);
-        tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    biased;
-                    _ = self.rx.changed() => can_frame = socket.create_frame(self.message_id,self.rx.borrow().clone()),
-                    _ = interval.tick() => socket.send_can(can_frame).await,
+pub fn spawn_sender(
+    channel: String,
+    message: CanMessage,
+    transport: Arc<dyn CanTransport>,
+) -> SenderTask {
+    let initial_values = message
+        .signals
+        .iter()
+        .map(|signal| (signal.name.clone(), signal.initial_value))
+        .collect::<HashMap<_, _>>();
+    let (tx, mut rx) = watch::channel(initial_values);
+    let actor = CanActor { tx };
+    let task = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(message.cycle_time);
+        let mut frame = match encode_message(&message, &rx.borrow()) {
+            Ok(frame) => frame,
+            Err(error) => {
+                error!(%channel, message = %message.name, %error, "failed to encode initial CAN frame");
+                return;
+            }
+        };
+        loop {
+            tokio::select! {
+                changed = rx.changed() => {
+                    if changed.is_err() { info!(%channel, message = %message.name, "CAN sender state closed"); break; }
+                    match encode_message(&message, &rx.borrow()) {
+                        Ok(next) => frame = next,
+                        Err(error) => error!(%channel, message = %message.name, %error, "failed to encode CAN frame"),
+                    }
+                }
+                _ = interval.tick() => {
+                    if let Err(error) = transport.send(&frame).await {
+                        error!(%channel, message = %message.name, can_id = format_args!("0x{:x}", frame.id), %error, "failed to send CAN frame");
+                    }
                 }
             }
-        });
+        }
+    });
+    SenderTask { actor, task }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        error::Error,
+        model::{ByteOrder, CanFrame, SignalSpec},
+        transport::CanTransport,
+    };
+    use async_trait::async_trait;
+    use std::{sync::Mutex, time::Duration};
+
+    struct CaptureTransport(Mutex<Vec<CanFrame>>);
+    #[async_trait]
+    impl CanTransport for CaptureTransport {
+        async fn send(&self, frame: &CanFrame) -> Result<(), Error> {
+            self.0.lock().unwrap().push(frame.clone());
+            Ok(())
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn sender_uses_latest_signal_value() {
+        let transport = Arc::new(CaptureTransport(Mutex::new(Vec::new())));
+        let message = CanMessage {
+            name: "Status".into(),
+            can_id: 0x100,
+            is_extended: false,
+            cycle_time: Duration::from_millis(100),
+            signals: vec![SignalSpec {
+                name: "Speed".into(),
+                start_bit: 0,
+                bit_length: 8,
+                byte_order: ByteOrder::LittleEndian,
+                is_signed: false,
+                factor: 1.0,
+                offset: 0.0,
+                minimum: None,
+                maximum: None,
+                initial_value: 0.0,
+            }],
+        };
+        let sender = spawn_sender("vcan0".into(), message, transport.clone());
+        sender.actor.send("Speed".into(), 42.0);
+        tokio::time::advance(Duration::from_millis(100)).await;
+        tokio::task::yield_now().await;
+        assert_eq!(transport.0.lock().unwrap()[0].data[0], 42);
+        sender.task.abort();
     }
 }

@@ -25,8 +25,8 @@ npm install
 npm run build
 cd ..
 
-# 2. Start the Rust server
-cargo run
+# 2. Start the Rust server example
+cargo run --example server
 ```
 
 The application will start, serving the static dashboard and WebSocket handler on:
@@ -42,6 +42,34 @@ npm run dev
 ```
 
 *Note: The frontend dynamically resolves the WebSocket connection to use the correct hostname and port, meaning it will connect back to the Axum backend automatically.*
+
+### 3. Use AxumCan from Rust
+
+Run the server example with:
+
+```bash
+cargo run --example server
+```
+
+The example defines a CAN model in Rust, uses the channel name (`vcan0`) as
+the SocketCAN interface name, periodically updates a signal, and serves the
+dashboard. It starts in `TransportMode::Print`, so it does not require a CAN
+interface. To send frames through Linux SocketCAN, change the mode to
+`TransportMode::SocketCan` and make sure the configured channel exists:
+
+```rust
+registry.set_transport_mode(TransportMode::SocketCan);
+```
+
+For a programmatic model and custom source example, run:
+
+```bash
+cargo run --example basic
+```
+
+Applications can also provide their own asynchronous `CanModelSource` or
+custom `CanTransport` implementation; the extension points are shown in the
+examples and the `source` and `transport` modules.
 
 ---
 
@@ -89,4 +117,3 @@ Messages exchanged between Client (C) and Server (S) use a `type` discriminator 
 | `clientUpdate` | C -> S | `signal: string, value: f64` | User changed a value manually on the dashboard. |
 | `setArbitration`| C -> S | `signal: string, allowBackend: bool` | Toggle whether the backend can overwrite a signal. |
 | `stateChanged` | S -> C | `signal: string, value: f64` | Broadcasts a value change to update UI and Monitor. |
-

@@ -1,6 +1,10 @@
 pub mod axum_can;
 pub mod can_sender;
+pub mod encoder;
 pub mod error;
 pub mod message_utils;
+pub mod model;
 pub mod registry;
 pub mod signals;
+pub mod source;
+pub mod transport;

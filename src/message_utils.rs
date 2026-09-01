@@ -18,12 +18,12 @@ impl MessageProvider for MockMessage {
             "test5" => 0x500,
             _ => {
                 // If it starts with "test" followed by a number
-                if value.starts_with("test") {
-                    if let Ok(num) = value["test".len()..].parse::<u16>() {
-                        if num > 0 && num <= 7 {
-                            return num * 0x100;
-                        }
-                    }
+                if let Some(suffix) = value.strip_prefix("test")
+                    && let Ok(num) = suffix.parse::<u16>()
+                    && num > 0
+                    && num <= 7
+                {
+                    return num * 0x100;
                 }
 
                 // Fallback: Deterministic DJB2 hash mapped to standard CAN ID range 1..=2047 (0x7FF)
@@ -46,18 +46,22 @@ impl MessageProvider for MockMessage {
             "test5" => Duration::from_millis(500),
             _ => {
                 // If it starts with "test" followed by a number
-                if value.starts_with("test") {
-                    if let Ok(num) = value["test".len()..].parse::<u64>() {
-                        if num > 0 {
-                            return Duration::from_millis(num * 100);
-                        }
-                    }
+                if let Some(suffix) = value.strip_prefix("test")
+                    && let Ok(num) = suffix.parse::<u64>()
+                    && num > 0
+                    && let Some(milliseconds) = num.checked_mul(100)
+                {
+                    return Duration::from_millis(milliseconds);
                 }
 
                 // Try to parse suffix like "_200ms" or "200ms"
                 if let Some(idx) = value.find("ms") {
                     let prefix = &value[..idx];
-                    let digits: String = prefix.chars().rev().take_while(|c| c.is_digit(10)).collect();
+                    let digits: String = prefix
+                        .chars()
+                        .rev()
+                        .take_while(|c| c.is_ascii_digit())
+                        .collect();
                     if !digits.is_empty() {
                         let val_str: String = digits.chars().rev().collect();
                         if let Ok(ms) = val_str.parse::<u64>() {
@@ -81,18 +85,33 @@ mod tests {
     fn test_mock_message_provider() {
         // Test compatibility
         assert_eq!(String::from("test1").to_id(), 0x100);
-        assert_eq!(String::from("test1").get_cycle_time(), Duration::from_millis(100));
+        assert_eq!(
+            String::from("test1").get_cycle_time(),
+            Duration::from_millis(100)
+        );
 
         assert_eq!(String::from("test5").to_id(), 0x500);
-        assert_eq!(String::from("test5").get_cycle_time(), Duration::from_millis(500));
+        assert_eq!(
+            String::from("test5").get_cycle_time(),
+            Duration::from_millis(500)
+        );
 
         // Test extra test message patterns
         assert_eq!(String::from("test7").to_id(), 0x700);
-        assert_eq!(String::from("test7").get_cycle_time(), Duration::from_millis(700));
+        assert_eq!(
+            String::from("test7").get_cycle_time(),
+            Duration::from_millis(700)
+        );
 
         // Test dynamic cycle parsing from name suffix
-        assert_eq!(String::from("engine_state_250ms").get_cycle_time(), Duration::from_millis(250));
-        assert_eq!(String::from("sensor_readings_50ms").get_cycle_time(), Duration::from_millis(50));
+        assert_eq!(
+            String::from("engine_state_250ms").get_cycle_time(),
+            Duration::from_millis(250)
+        );
+        assert_eq!(
+            String::from("sensor_readings_50ms").get_cycle_time(),
+            Duration::from_millis(50)
+        );
 
         // Test dynamic ID hashing fallback
         let id_custom = String::from("custom_can_msg").to_id();
@@ -101,4 +120,3 @@ mod tests {
         assert_eq!(id_custom, String::from("custom_can_msg").to_id());
     }
 }
-

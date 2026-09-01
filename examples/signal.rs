@@ -1,61 +1,31 @@
-use std::{collections::HashMap, path::Path};
+//! Inspect the channels and signals loaded from `can_signal.json`.
+//!
+//! Channel names are read from the configuration; this example does not
+//! assume a fixed set of interfaces.
 
-use axum_can::{
-    error::Error,
-    signals::{ChannelInfo, MessageInfo},
-};
-use serde::{Deserialize, Serialize};
+use axum_can::source::{CanModelSource, JsonModelSource};
 
-fn main() {}
+#[tokio::main]
+async fn main() -> Result<(), axum_can::error::Error> {
+    let model = JsonModelSource::new("can_signal.json").load().await?;
 
-#[derive(Debug, Serialize, Deserialize, Default, Clone, PartialEq, Eq)]
-pub struct Signals {
-    pub vcan1: HashMap<String, HashMap<String, u64>>,
-    pub vcan2: HashMap<String, HashMap<String, u64>>,
-    pub vcan3: HashMap<String, HashMap<String, u64>>,
-    pub vcan4: HashMap<String, HashMap<String, u64>>,
-    pub vcan5: HashMap<String, HashMap<String, u64>>,
-    pub vcan6: HashMap<String, HashMap<String, u64>>,
-}
-
-impl Signals {
-    pub async fn init(path: &Path) -> Result<Self, Error> {
-        let content = tokio::fs::read_to_string(path).await?;
-        serde_json::from_str(&content).map_err(|err| err.into())
-    }
-
-    pub fn to_channel_info(&self) -> Vec<ChannelInfo> {
-        let mut channels = Vec::new();
-
-        for (channel_name, messages) in [
-            ("vcan1", &self.vcan1),
-            ("vcan2", &self.vcan2),
-            ("vcan3", &self.vcan3),
-            ("vcan4", &self.vcan4),
-            ("vcan5", &self.vcan5),
-            ("vcan6", &self.vcan6),
-        ] {
-            let mut message_infos = HashMap::new();
-            for (message_name, signals) in messages {
-                let mut signal_infos = HashMap::new();
-                for (signal_name, value) in signals {
-                    signal_infos.insert(signal_name.clone(), *value);
-                }
-                message_infos.insert(
-                    message_name.clone(),
-                    MessageInfo {
-                        message: message_name.clone(),
-                        cycle_time: 100, // Default cycle time, can be adjusted as needed
-                        signals: signal_infos,
-                    },
+    for channel in model.channels {
+        println!("channel: {}", channel.name);
+        for message in channel.messages {
+            println!(
+                "  message: {} (id=0x{:x}, cycle={}ms)",
+                message.name,
+                message.can_id,
+                message.cycle_time.as_millis()
+            );
+            for signal in message.signals {
+                println!(
+                    "    signal: {} (start_bit={}, bit_length={}, initial={})",
+                    signal.name, signal.start_bit, signal.bit_length, signal.initial_value
                 );
             }
-            channels.push(ChannelInfo {
-                channel: channel_name.to_string(),
-                messages: message_infos,
-            });
         }
-
-        channels
     }
+
+    Ok(())
 }

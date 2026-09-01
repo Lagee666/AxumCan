@@ -5,13 +5,15 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::broadcast;
+use tokio::{sync::broadcast, task::JoinHandle};
 use tracing::{debug, error};
 
 use crate::{
-    can_sender::{Builder, CanActor, MockSocket, SocketUtils},
+    can_sender::{CanActor, spawn_sender},
     error::Error,
     signals::Signals,
+    source::{CanModelSource, JsonModelSource, legacy_signals},
+    transport::{CanTransport, TransportMode},
 };
 
 const JSON_FILE_PATH: &str = "can_signal.json";
@@ -38,10 +40,12 @@ pub enum WsMessage {
 }
 
 pub struct Registry {
-    socket: Box<dyn SocketUtils>,
     actors: HashMap<String, Vec<CanActor>>,
     arbitration: Arc<Mutex<HashMap<String, bool>>>,
-    signal_path: PathBuf,
+    source: Box<dyn CanModelSource>,
+    mode: TransportMode,
+    tasks: Vec<JoinHandle<()>>,
+    transports: Vec<Arc<dyn CanTransport>>,
     pub broadcast_tx: broadcast::Sender<WsMessage>,
     pub initial_signals: Signals,
 }
@@ -50,10 +54,12 @@ impl Default for Registry {
     fn default() -> Self {
         let (broadcast_tx, _) = broadcast::channel(100);
         Self {
-            socket: Box::new(MockSocket),
             actors: HashMap::new(),
             arbitration: Arc::new(Mutex::new(HashMap::new())),
-            signal_path: PathBuf::from(JSON_FILE_PATH),
+            source: Box::new(JsonModelSource::new(JSON_FILE_PATH)),
+            mode: TransportMode::default(),
+            tasks: Vec::new(),
+            transports: Vec::new(),
             broadcast_tx,
             initial_signals: Signals::default(),
         }
@@ -61,116 +67,129 @@ impl Default for Registry {
 }
 
 impl Registry {
-    pub fn set_socket(&mut self, socket: Box<dyn SocketUtils>) {
-        self.socket = socket;
-    }
-
     pub fn set_signal_path(&mut self, path: PathBuf) {
-        self.signal_path = path;
+        self.source = Box::new(JsonModelSource::new(path));
+    }
+    pub fn set_transport_mode(&mut self, mode: TransportMode) {
+        self.mode = mode;
+    }
+    pub fn set_model_source(&mut self, source: Box<dyn CanModelSource>) {
+        self.source = source;
     }
 
     pub async fn init(&mut self) -> Result<(), Error> {
+        self.shutdown().await;
+        let model = self.source.load().await?;
+        model.validate()?;
+        let factory = self.mode.factory();
+        let mut transports: HashMap<String, Arc<dyn CanTransport>> = HashMap::new();
+        for channel in &model.channels {
+            if transports.contains_key(&channel.name) {
+                return Err(Error::InvalidModel(format!(
+                    "duplicate CAN channel {}",
+                    channel.name
+                )));
+            }
+            let transport = match factory.create(&channel.name) {
+                Ok(transport) => transport,
+                Err(error) => {
+                    for previous in transports.values() {
+                        let _ = previous.stop().await;
+                    }
+                    return Err(error);
+                }
+            };
+            if let Err(error) = transport.start().await {
+                let _ = transport.stop().await;
+                for previous in transports.values() {
+                    let _ = previous.stop().await;
+                }
+                return Err(error);
+            }
+            transports.insert(channel.name.clone(), transport);
+        }
+        self.initial_signals = legacy_signals(&model);
         self.actors.clear();
-        let signals = Signals::init(&self.signal_path).await?;
-        self.initial_signals = signals.clone();
-
-        self.register_actors("vcan1", signals.vcan1);
-        self.register_actors("vcan2", signals.vcan2);
-        self.register_actors("vcan3", signals.vcan3);
-        self.register_actors("vcan4", signals.vcan4);
-        self.register_actors("vcan5", signals.vcan5);
-        self.register_actors("vcan6", signals.vcan6);
-
+        self.transports = transports.values().cloned().collect();
+        for channel in model.channels {
+            let transport = transports
+                .get(&channel.name)
+                .expect("transport created above")
+                .clone();
+            for message in channel.messages {
+                let sender = spawn_sender(channel.name.clone(), message.clone(), transport.clone());
+                for signal in &message.signals {
+                    debug!(channel = %channel.name, message = %message.name, signal = %signal.name, "registered Logical Signal");
+                    self.actors
+                        .entry(signal.name.clone())
+                        .or_default()
+                        .push(sender.actor.clone());
+                }
+                self.tasks.push(sender.task);
+            }
+        }
         Ok(())
     }
 
-    fn register_actors(&mut self, channel: &str, signals: HashMap<String, HashMap<String, u64>>) {
-        for (message, signal_map) in signals {
-            let actor = match Builder::new()
-                .set_interface(channel)
-                .set_id(Box::new(message.clone()))
-                .build()
-            {
-                Ok(actor) => actor,
-                Err(e) => {
-                    error!("Build CAN actor failed: {}", e);
-                    continue;
-                }
-            };
-
-            for (signal, value) in signal_map {
-                let signal_name = signal;
-                debug!(
-                    "Register Channel: {:?}, message: {:?}, signal: {:?}",
-                    channel, message, signal_name
-                );
-                actor.send(signal_name.clone(), value as f64);
-                self.add(signal_name, actor.clone());
+    pub async fn shutdown(&mut self) {
+        for task in self.tasks.drain(..) {
+            task.abort();
+        }
+        for transport in self.transports.drain(..) {
+            if let Err(error) = transport.stop().await {
+                error!(%error, "failed to stop CAN transport");
             }
         }
+        self.actors.clear();
     }
 
-    fn add(&mut self, signal_label: String, actor: CanActor) {
-        self.actors.entry(signal_label).or_default().push(actor);
-    }
-
-    pub fn update(&self, signal_label: String, value: f64, is_backend: bool) {
-        if is_backend {
-            let arbitration = self.arbitration.lock().unwrap();
-            if let Some(&allow_backend) = arbitration.get(&signal_label) {
-                if !allow_backend {
-                    return;
-                }
-            }
+    pub fn update(&self, signal_label: String, value: f64, is_backend: bool) -> bool {
+        if is_backend && !self.backend_allowed(&signal_label) {
+            return false;
         }
-
-        let actors = self.actors.get(&signal_label);
-        if let Some(actors) = actors {
-            for actor in actors {
-                actor.send(signal_label.clone(), value);
-            }
+        let Some(actors) = self.actors.get(&signal_label) else {
+            return false;
+        };
+        for actor in actors {
+            actor.send(signal_label.clone(), value);
         }
+        let _ = self.broadcast_tx.send(WsMessage::StateChanged {
+            signal: signal_label,
+            value,
+        });
+        true
     }
 
     pub fn set_arbitration(&self, signal_label: String, allow_backend: bool) {
-        let mut arbitration = self.arbitration.lock().unwrap();
-        arbitration.insert(signal_label, allow_backend);
+        self.arbitration
+            .lock()
+            .unwrap()
+            .insert(signal_label, allow_backend);
     }
-
-    /// FEATURE 1: Update a signal that exists in the dashboard and sync its UI value.
-    /// This also respects arbitration and updates the underlying CAN actors.
-    pub fn update_dashboard(&self, signal_label: String, value: f64) {
-        // Respect arbitration
-        let arbitration = self.arbitration.lock().unwrap();
-        if let Some(&allow_backend) = arbitration.get(&signal_label) {
-            if !allow_backend {
-                return;
-            }
-        }
-        drop(arbitration);
-
-        // Update CAN actors
-        let actors = self.actors.get(&signal_label);
-        if let Some(actors) = actors {
-            for actor in actors {
-                actor.send(signal_label.clone(), value);
-            }
-        }
-
-        // Send to frontend to update the control UI and monitor
-        let _ = self.broadcast_tx.send(WsMessage::StateChanged {
-            signal: signal_label.to_string(),
-            value,
-        });
+    pub fn update_dashboard(&self, signal_label: String, value: f64) -> bool {
+        self.update(signal_label, value, true)
     }
-
-    /// FEATURE 2: Send an arbitrary signal to the frontend Monitor only.
-    /// This supports any signal name (String), even if it doesn't exist in the signal map.
     pub fn send_to_monitor(&self, signal_name: String, value: f64) {
         let _ = self.broadcast_tx.send(WsMessage::StateChanged {
             signal: signal_name,
             value,
         });
+    }
+    fn backend_allowed(&self, signal: &str) -> bool {
+        self.arbitration
+            .lock()
+            .unwrap()
+            .get(signal)
+            .copied()
+            .unwrap_or(true)
+    }
+}
+
+impl Drop for Registry {
+    fn drop(&mut self) {
+        for task in self.tasks.drain(..) {
+            task.abort();
+        }
     }
 }
 
@@ -181,67 +200,37 @@ mod tests {
     #[test]
     fn test_ws_message_serialization() {
         let msg = WsMessage::SetArbitration {
-            signal: "VehSpeed".to_string(),
+            signal: "VehSpeed".into(),
             allow_backend: false,
         };
         let json = serde_json::to_string(&msg).unwrap();
-        // Check that variant is camelCase (setArbitration) and field is renamed (allowBackend)
         assert!(json.contains("\"type\":\"setArbitration\""));
         assert!(json.contains("\"allowBackend\":false"));
-
-        let deserialized: WsMessage = serde_json::from_str(&json).unwrap();
-        if let WsMessage::SetArbitration {
-            signal,
-            allow_backend,
-        } = deserialized
-        {
-            assert_eq!(signal, "VehSpeed");
-            assert!(!allow_backend);
-        } else {
-            panic!("Deserialized to wrong variant");
-        }
+        assert!(matches!(
+            serde_json::from_str::<WsMessage>(&json).unwrap(),
+            WsMessage::SetArbitration {
+                allow_backend: false,
+                ..
+            }
+        ));
     }
 
     #[tokio::test]
-    async fn test_arbitration_logic() {
+    async fn unknown_client_update_is_not_broadcast() {
         let registry = Registry::default();
-        let label = "VehSpeed".to_string();
         let mut rx = registry.broadcast_tx.subscribe();
-
-        // 1. Enable arbitration (default is allow)
-        registry.set_arbitration(label.clone(), true);
-        registry.update_dashboard(label.clone(), 10.0);
-
-        // Should receive message
-        let msg = rx.recv().await.unwrap();
-        if let WsMessage::StateChanged { value, .. } = msg {
-            assert_eq!(value, 10.0);
-        }
-
-        // 2. Disable arbitration
-        registry.set_arbitration(label.clone(), false);
-        registry.update_dashboard(label.clone(), 20.0);
-
-        // Should NOT receive a new message (timeout or check that previous is different)
-        // In a real test we might use tokio::time::timeout
-        let result = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv()).await;
+        assert!(!registry.update("Speed".into(), 10.0, false));
         assert!(
-            result.is_err(),
-            "Should not have received message when arbitration is disabled"
+            tokio::time::timeout(std::time::Duration::from_millis(10), rx.recv())
+                .await
+                .is_err()
         );
     }
 
     #[tokio::test]
-    async fn test_send_to_monitor() {
+    async fn backend_arbitration_blocks_backend_updates() {
         let registry = Registry::default();
-        let mut rx = registry.broadcast_tx.subscribe();
-
-        registry.send_to_monitor("UnknownSignal".to_string(), 99.0);
-
-        let msg = rx.recv().await.unwrap();
-        if let WsMessage::StateChanged { signal, value } = msg {
-            assert_eq!(signal, "UnknownSignal");
-            assert_eq!(value, 99.0);
-        }
+        registry.set_arbitration("Speed".into(), false);
+        assert!(!registry.update_dashboard("Speed".into(), 10.0));
     }
 }

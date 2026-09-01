@@ -6,6 +6,7 @@ use axum_can::{
     transport::TransportMode,
 };
 use tracing::{error, info, level_filters::LevelFilter};
+
 #[tokio::main]
 async fn main() {
     let subscriber = tracing_subscriber::fmt()
@@ -20,26 +21,25 @@ async fn main() {
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
     let mut registry = Registry::default();
+    // Registry::default() loads channel names and messages from can_signal.json.
+    // Each channel name is passed directly to the selected transport.
     registry.set_transport_mode(TransportMode::Print);
-    if let Err(e) = registry.init().await {
-        error!("Init CAN registry failed: {}, exit the process", e);
-        std::process::exit(1);
+    if let Err(error) = registry.init().await {
+        error!(%error, "failed to initialize CAN registry");
+        return;
     }
 
     let state = Arc::new(AppState {
         registry: Arc::new(registry),
     });
-
-    let port = 8028;
-    let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    info!("Listening on localhost:{}", port);
-
-    let listener = match tokio::net::TcpListener::bind(&addr).await {
+    let addr = SocketAddr::from(([0, 0, 0, 0], 8028));
+    let listener = match tokio::net::TcpListener::bind(addr).await {
         Ok(listener) => listener,
         Err(error) => {
             error!(%error, "failed to bind HTTP listener");
-            std::process::exit(1);
+            return;
         }
     };
-    serve(listener, state).await
+    info!(address = %addr, "AxumCan dashboard is listening");
+    serve(listener, state).await;
 }
