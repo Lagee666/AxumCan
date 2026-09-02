@@ -1,0 +1,8 @@
+[can]
+# Use vcan0 for a virtual interface or replace this with can0/your real
+# SocketCAN interface.
+interface = "vcan0"
+id = 0x123
+extended = false
+data = [0x01, 0x02, 0x03, 0x04]
+interval_ms = 1000
