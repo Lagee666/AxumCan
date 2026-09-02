@@ -67,6 +67,28 @@ For a programmatic model and custom source example, run:
 cargo run --example basic
 ```
 
+### 4. Direct SocketCAN example
+
+The standalone project in [`examples/socket_can`](examples/socket_can) uses
+`socketcan = 3.5.0` directly. Its interface name and frame settings are read
+from [`socket_can.toml`](examples/socket_can/socket_can.toml):
+
+```bash
+# Create a virtual CAN interface for testing (Linux)
+sudo modprobe vcan
+sudo ip link add dev vcan0 type vcan
+sudo ip link set up vcan0
+
+# Monitor frames in another terminal
+candump vcan0
+
+# Build and run the standalone example
+cargo run --manifest-path examples/socket_can/Cargo.toml
+```
+
+Change the `interface` value in the TOML file to the name of a real
+SocketCAN interface, such as `can0`, when using physical hardware.
+
 Applications can also provide their own asynchronous `CanModelSource` or
 custom `CanTransport` implementation; the extension points are shown in the
 examples and the `source` and `transport` modules.
