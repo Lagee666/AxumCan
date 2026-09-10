@@ -3,8 +3,6 @@ name = "axum-can"
 version = "0.1.0"
 edition = "2024"
 
-
-
 [dependencies]
 async-trait = "0.1.8"
 axum = { version = "0.8.9", features = ["ws"] }
